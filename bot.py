@@ -4,7 +4,9 @@ import urllib.request
 import urllib.parse
 import ssl
 import os
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 TOKEN     = os.getenv("TOKEN", "8684491581:AAGqkkxxCZ3O1sCcsWDucpqqzh68RMASXbE")
 LAWYER_ID = os.getenv("LAWYER_ID", "415840369")
@@ -178,7 +180,22 @@ def handle_button(chat_id, cb_id, data, uname):
     send(chat_id, f"✅ <b>{NAMES[data]}</b>\n\nОпишите ситуацию подробнее — "
          "чем больше деталей, тем точнее анализ:")
 
-# ── Запуск ────────────────────────────────────────────────────────────────────
+# ── Веб-сервер (запускается ДО основного цикла!) ──────────────────────────────
+class Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Femida63 Bot is running!")
+    def log_message(self, *args):
+        pass
+
+def run_web():
+    HTTPServer(("0.0.0.0", int(os.getenv("PORT", 8080))), Health).serve_forever()
+
+threading.Thread(target=run_web, daemon=True).start()
+print(f"✅ Веб-сервер запущен на порту {os.getenv('PORT', 8080)}")
+
+# ── Запуск бота ───────────────────────────────────────────────────────────────
 print("Проверяем подключение к Telegram...")
 result = api_call("getMe", {})
 if result and result.get("ok"):
@@ -220,21 +237,3 @@ while True:
     except Exception as e:
         print(f"[ERR] {e}")
         time.sleep(5)
-
-
-# ── Веб-сервер для бесплатного хостинга Render ────────────────────────────────
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class Health(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Femida63 Bot is running!")
-    def log_message(self, *args):
-        pass
-
-def run_web():
-    HTTPServer(("0.0.0.0", int(os.getenv("PORT", 8080))), Health).serve_forever()
-
-threading.Thread(target=run_web, daemon=True).start()
