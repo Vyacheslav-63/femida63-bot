@@ -1,7 +1,6 @@
 import time
 import json
 import urllib.request
-import urllib.parse
 import ssl
 import os
 import threading
@@ -120,8 +119,7 @@ def notify_lawyer(s):
 def handle_text(chat_id, text, uname, fname):
     if chat_id not in sessions:
         sessions[chat_id] = new_session(uname)
-
-    s = sessions[chat_id]
+    s  = sessions[chat_id]
     st = s["state"]
 
     if text.startswith("/start"):
@@ -141,7 +139,6 @@ def handle_text(chat_id, text, uname, fname):
 
     if st == "cat":
         send(chat_id, "Пожалуйста, выберите категорию из меню выше 👆", keyboard())
-
     elif st == "describe":
         s["problem"] = text
         s["state"]   = "name"
@@ -150,13 +147,11 @@ def handle_text(chat_id, text, uname, fname):
         send(chat_id, f"📋 <b>Предварительный анализ:</b>\n\n{ANSWERS[s['cat']]}")
         time.sleep(0.5)
         send(chat_id, "Чтобы юрист мог с вами связаться — как вас зовут? 👤")
-
     elif st == "name":
         s["name"]  = text
         s["state"] = "phone"
         send(chat_id, f"Отлично, <b>{text}</b>! 👍\n\n"
              "Введите номер телефона:\n<i>Пример: +7 912 345-67-89</i>")
-
     elif st == "phone":
         s["phone"] = text
         s["state"] = "done"
@@ -167,7 +162,6 @@ def handle_text(chat_id, text, uname, fname):
              "Если срочно — звоните: 📞 <b>+7 (929) 713-13-08</b>")
         print(f"✅ Заявка: {s['name']} | {s['phone']} | {s['tg']}")
         notify_lawyer(s)
-
     elif st == "done":
         send(chat_id, "Ваша заявка уже передана юристу. Ожидайте звонка!\n\nДля нового вопроса: /start")
 
@@ -180,7 +174,47 @@ def handle_button(chat_id, cb_id, data, uname):
     send(chat_id, f"✅ <b>{NAMES[data]}</b>\n\nОпишите ситуацию подробнее — "
          "чем больше деталей, тем точнее анализ:")
 
-# ── Веб-сервер (запускается ДО основного цикла!) ──────────────────────────────
+# ── Телеграм-бот в фоновом потоке ─────────────────────────────────────────────
+def run_bot():
+    global offset
+    print("Проверяем подключение к Telegram...")
+    result = api_call("getMe", {})
+    if result and result.get("ok"):
+        print(f"✅ Бот подключён: @{result['result']['username']}")
+    else:
+        print("❌ Ошибка подключения с Telegram!")
+        return
+
+    send(LAWYER_ID, f"🤖 Femida63 Bot запущен!\nВремя: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    print("✅ Уведомление юристу отправлено. Ожидаем сообщения...\n")
+
+    while True:
+        try:
+            result = api_call("getUpdates", {"offset": offset, "timeout": 25})
+            if not result or not result.get("ok"):
+                time.sleep(3)
+                continue
+            for u in result["result"]:
+                offset = u["update_id"] + 1
+                if u.get("message") and u["message"].get("text"):
+                    m     = u["message"]
+                    cid   = m["chat"]["id"]
+                    txt   = m["text"]
+                    uname = m["from"].get("username", "")
+                    fname = m["from"].get("first_name", "друг")
+                    print(f"[{cid}] {fname}: {txt}")
+                    handle_text(cid, txt, uname, fname)
+                if u.get("callback_query"):
+                    cb    = u["callback_query"]
+                    cid   = cb["message"]["chat"]["id"]
+                    uname = cb["from"].get("username", "")
+                    print(f"[{cid}] кнопка: {cb['data']}")
+                    handle_button(cid, cb["id"], cb["data"], uname)
+        except Exception as e:
+            print(f"[ERR] {e}")
+            time.sleep(5)
+
+# ── HTTP-сервер в ГЛАВНОМ потоке (требование Render) ──────────────────────────
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -189,51 +223,11 @@ class Health(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-def run_web():
-    HTTPServer(("0.0.0.0", int(os.getenv("PORT", 8080))), Health).serve_forever()
+PORT = int(os.getenv("PORT", 10000))
+print(f"Запускаем веб-сервер на порту {PORT}...")
 
-threading.Thread(target=run_web, daemon=True).start()
-print(f"✅ Веб-сервер запущен на порту {os.getenv('PORT', 8080)}")
+# Бот — в фоне, HTTP — главный поток
+threading.Thread(target=run_bot, daemon=True).start()
 
-# ── Запуск бота ───────────────────────────────────────────────────────────────
-print("Проверяем подключение к Telegram...")
-result = api_call("getMe", {})
-if result and result.get("ok"):
-    print(f"✅ Бот подключён: @{result['result']['username']}")
-else:
-    print("❌ Ошибка подключения!")
-    exit(1)
-
-send(LAWYER_ID, f"🤖 Femida63 Bot запущен на сервере!\nВремя: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-print("✅ Уведомление о запуске отправлено")
-print("Бот работает 24/7. Ожидаем сообщения...\n")
-
-while True:
-    try:
-        result = api_call("getUpdates", {"offset": offset, "timeout": 25})
-        if not result or not result.get("ok"):
-            time.sleep(3)
-            continue
-
-        for u in result["result"]:
-            offset = u["update_id"] + 1
-
-            if u.get("message") and u["message"].get("text"):
-                m     = u["message"]
-                cid   = m["chat"]["id"]
-                txt   = m["text"]
-                uname = m["from"].get("username", "")
-                fname = m["from"].get("first_name", "друг")
-                print(f"[{cid}] {fname}: {txt}")
-                handle_text(cid, txt, uname, fname)
-
-            if u.get("callback_query"):
-                cb    = u["callback_query"]
-                cid   = cb["message"]["chat"]["id"]
-                uname = cb["from"].get("username", "")
-                print(f"[{cid}] кнопка: {cb['data']}")
-                handle_button(cid, cb["id"], cb["data"], uname)
-
-    except Exception as e:
-        print(f"[ERR] {e}")
-        time.sleep(5)
+print(f"✅ HTTP-сервер слушает порт {PORT}")
+HTTPServer(("0.0.0.0", PORT), Health).serve_forever()
